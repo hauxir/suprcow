@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path"
 	"path/filepath"
 	"sort"
@@ -15,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hauxir/suprcow/internal/compose"
 	"github.com/hauxir/suprcow/internal/config"
 	"github.com/hauxir/suprcow/internal/engine"
 	"github.com/hauxir/suprcow/internal/env"
@@ -300,6 +302,16 @@ func (m *Manager) spawn(ctx context.Context, e *env.Environment) error {
 		return fmt.Errorf("checkout: %w", err)
 	}
 	e.Worktree = worktree
+
+	// The compose file comes from the PR's checkout and the daemon runs it with
+	// the host Docker socket, so reject any host-escape config before running it.
+	composeData, err := os.ReadFile(filepath.Join(worktree, m.cfg.Compose))
+	if err != nil {
+		return fmt.Errorf("read compose %q: %w", m.cfg.Compose, err)
+	}
+	if err := compose.Sanitize(composeData); err != nil {
+		return fmt.Errorf("preview compose rejected: %w", err)
+	}
 
 	rc := m.cfg.RenderContext(e.PR, e.Branch, e.SHA, m.baseDomain)
 	overridePath, err := m.writeOverride(rc, e.PR, worktree)

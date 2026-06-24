@@ -22,7 +22,16 @@ type fakeRepo struct {
 
 func (f *fakeRepo) Checkout(_ context.Context, pr int, _ string) (string, error) {
 	wt := filepath.Join(f.dir, fmt.Sprintf("pr-%d", pr))
-	return wt, os.MkdirAll(wt, 0o755)
+	if err := os.MkdirAll(wt, 0o755); err != nil {
+		return "", err
+	}
+	// A minimal, safe compose file so the spawn path's sanitize check has
+	// something to read (default compose name is docker-compose.yml).
+	stub := "services:\n  web:\n    image: nginx\n"
+	if err := os.WriteFile(filepath.Join(wt, "docker-compose.yml"), []byte(stub), 0o644); err != nil {
+		return "", err
+	}
+	return wt, nil
 }
 
 func (f *fakeRepo) ChangedFiles(_ context.Context, _ int, _, _ string) ([]string, error) {

@@ -234,8 +234,10 @@ Early but functional. Implemented: config + validation, host routing, lazy
 spawn, same-origin routing, health gates, **HMR-first auto-pull** (hot-reload in
 place; rebuild only on dependency/compose changes) with post-update hooks, LRU
 eviction, idle reaping, teardown, GitHub App auth (repo-access gate, on by
-default) with installation-token cloning of private repos, webhooks, waiting
-page, Bolt-backed state. On the roadmap: GitLab/Gitea support, build/dep cache
+default) with installation-token cloning of private repos, preview-compose
+sanitization (rejects host-escape config — privileged, host bind-mounts, etc. —
+since the daemon holds the Docker socket), webhooks, waiting page, Bolt-backed
+state. On the roadmap: GitLab/Gitea support, build/dep cache
 warming, a status dashboard, and a pluggable non-compose backend.
 
 ## License
