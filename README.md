@@ -1,7 +1,7 @@
 # suprcow
 <img width="195" height="150" alt="Image" src="https://github.com/user-attachments/assets/5638e558-b4b2-4a34-82fb-2aaf35255220" />
 
-**super copy-on-write preview environments** — *Compose · On-demand · Workspaces*
+**super copy-on-write preview environments** — on-demand, per-PR Docker Compose stacks that spin up on first request and idle back to zero.
 
 Give every pull request its own isolated, fully-running copy of your app at its
 own subdomain. Stacks spin up **lazily on the first request** to their URL and
@@ -46,7 +46,8 @@ PR lifecycle + bring-your-own-compose."*
                    │ shared docker network (services by stable alias)
      ┌─────────────┼──────────────┐
      │ pr-123: web, api, db        │  each = `docker compose -p <project>-pr-<n>`
-     │ pr-456: web, api, db        │  with its own copy-on-write volumes
+     │ pr-456: web, api, db        │  sharing base image layers (copy-on-write),
+     │                             │  with its own isolated volumes
      └─────────────────────────────┘
 ```
 
