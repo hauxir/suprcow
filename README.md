@@ -1,4 +1,5 @@
-# 🐮 suprcow
+# suprcow
+<img width="195" height="150" alt="Image" src="https://github.com/user-attachments/assets/5638e558-b4b2-4a34-82fb-2aaf35255220" />
 
 **super copy-on-write preview environments** — *Compose · On-demand · Workspaces*
 
