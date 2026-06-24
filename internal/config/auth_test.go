@@ -20,6 +20,17 @@ expose:
 	}
 }
 
+func TestCommentEnabledDefault(t *testing.T) {
+	on, _ := Parse([]byte("repo: a/b\nexpose:\n  - { service: web, subdomain: \"pr-{n}\", port: 80 }\n"))
+	if !on.CommentEnabled() {
+		t.Error("comment_on_pr should default to enabled")
+	}
+	off, _ := Parse([]byte("repo: a/b\nexpose:\n  - { service: web, subdomain: \"pr-{n}\", port: 80 }\ncomment_on_pr: false\n"))
+	if off.CommentEnabled() {
+		t.Error("comment_on_pr: false should disable")
+	}
+}
+
 func TestAuthOptOut(t *testing.T) {
 	c, err := Parse([]byte(`
 repo: github.com/me/app

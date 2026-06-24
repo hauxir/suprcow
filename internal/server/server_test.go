@@ -1,12 +1,14 @@
 package server
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -107,6 +109,55 @@ func TestWebhookPing(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200", rec.Code)
 	}
+}
+
+func TestWebhookOpenedComments(t *testing.T) {
+	cfg, err := config.Parse([]byte(`
+repo: github.com/me/app
+expose:
+  - { service: web, subdomain: "pr-{n}", port: 80 }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mgr := manager.New(manager.Options{Project: "app", Config: cfg, BaseDomain: "preview.test", Store: store.NewMemory()})
+
+	var mu sync.Mutex
+	var gotPR int
+	var gotBody string
+	srv, err := New(Options{
+		Config: cfg, Manager: mgr, BaseDomain: "preview.test", WebhookSecret: secret,
+		Comment: func(_ context.Context, pr int, body string) error {
+			mu.Lock()
+			gotPR, gotBody = pr, body
+			mu.Unlock()
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body := []byte(`{"action":"opened","number":42,"pull_request":{"head":{"ref":"x","sha":"s"}}}`)
+	req := httptest.NewRequest(http.MethodPost, "http://box"+HookPath, strings.NewReader(string(body)))
+	req.Header.Set("X-GitHub-Event", "pull_request")
+	req.Header.Set("X-Hub-Signature-256", sign(body))
+	srv.Handler().ServeHTTP(httptest.NewRecorder(), req)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		b, pr := gotBody, gotPR
+		mu.Unlock()
+		if b != "" {
+			if pr != 42 || !strings.Contains(b, "https://pr-42.preview.test/") {
+				t.Fatalf("comment pr=%d body=%q", pr, b)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("preview comment was not posted")
 }
 
 func TestWebhookOpenedRecordsPending(t *testing.T) {

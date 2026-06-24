@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -184,4 +185,71 @@ func (a *App) do(ctx context.Context, jwt, method, url string, out any) error {
 func b64json(v any) string {
 	b, _ := json.Marshal(v)
 	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+// commentMarker is a hidden HTML comment used to find suprcow's own comment so
+// it updates one comment instead of posting a new one each time.
+const commentMarker = "<!-- suprcow -->"
+
+// UpsertComment creates or updates suprcow's single comment on a PR. It finds an
+// existing comment by commentMarker and PATCHes it, else POSTs a new one. Needs
+// the App's Pull requests: Write permission.
+func (a *App) UpsertComment(ctx context.Context, owner, repo string, number int, body string) error {
+	tok, err := a.Token(ctx, owner, repo)
+	if err != nil {
+		return err
+	}
+	full := commentMarker + "\n" + body
+
+	var comments []struct {
+		ID   int64  `json:"id"`
+		Body string `json:"body"`
+	}
+	list := fmt.Sprintf("https://api.github.com/repos/%s/%s/issues/%d/comments?per_page=100", owner, repo, number)
+	if err := a.tokenJSON(ctx, tok, http.MethodGet, list, nil, &comments); err != nil {
+		return fmt.Errorf("list comments: %w", err)
+	}
+	for _, c := range comments {
+		if strings.Contains(c.Body, commentMarker) {
+			url := fmt.Sprintf("https://api.github.com/repos/%s/%s/issues/comments/%d", owner, repo, c.ID)
+			return a.tokenJSON(ctx, tok, http.MethodPatch, url, map[string]string{"body": full}, nil)
+		}
+	}
+	create := fmt.Sprintf("https://api.github.com/repos/%s/%s/issues/%d/comments", owner, repo, number)
+	return a.tokenJSON(ctx, tok, http.MethodPost, create, map[string]string{"body": full}, nil)
+}
+
+// tokenJSON performs a GitHub API request authenticated with an installation
+// token, optionally sending payload as JSON and decoding the response into out.
+func (a *App) tokenJSON(ctx context.Context, token, method, url string, payload, out any) error {
+	var bodyReader io.Reader
+	if payload != nil {
+		b, err := json.Marshal(payload)
+		if err != nil {
+			return err
+		}
+		bodyReader = strings.NewReader(string(b))
+	}
+	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := a.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("github %s %s: %d: %s", method, url, resp.StatusCode, b)
+	}
+	if out != nil {
+		return json.NewDecoder(resp.Body).Decode(out)
+	}
+	return nil
 }

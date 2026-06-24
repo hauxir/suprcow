@@ -81,13 +81,29 @@ func cmdServe(args []string) int {
 	runner := shell.Exec{}
 	repo := git.New(cloneURL, filepath.Join(*dataDir, "repos", proj), runner)
 
-	// Clone private repos with a short-lived GitHub App installation token.
-	cloneAuth, err := buildCloneAuth(cfg)
+	// GitHub App: powers private-repo cloning (installation tokens) and PR
+	// comments. Absent App credentials → nil (fine for public repos).
+	app, err := buildGitHubApp(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "serve: %v\n", err)
 		return 1
 	}
-	repo.AuthHeader = cloneAuth
+	var commenter func(context.Context, int, string) error
+	if app != nil {
+		owner, name, err := splitOwnerRepo(cfg.Repo)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "serve: %v\n", err)
+			return 1
+		}
+		repo.AuthHeader = func(ctx context.Context) (string, error) {
+			return app.GitAuthHeader(ctx, owner, name)
+		}
+		if cfg.CommentEnabled() {
+			commenter = func(ctx context.Context, pr int, body string) error {
+				return app.UpsertComment(ctx, owner, name, pr, body)
+			}
+		}
+	}
 
 	var allEnvFiles []string
 	if cfg.EnvFile != "" {
@@ -124,6 +140,7 @@ func cmdServe(args []string) int {
 		BaseDomain:    *baseDomain,
 		WebhookSecret: os.Getenv(*secretEnv),
 		Auth:          gate,
+		Comment:       commenter,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "serve: %v\n", err)
@@ -186,10 +203,9 @@ func buildAuth(cfg *config.Config, baseDomain, authHost string) (*auth.GitHub, e
 	})
 }
 
-// buildCloneAuth builds a git credential provider from the GitHub App's
-// installation token, so private repos clone with a short-lived, least-privilege
-// credential. Returns nil when no App credentials are set (fine for public repos).
-func buildCloneAuth(cfg *config.Config) (func(context.Context) (string, error), error) {
+// buildGitHubApp constructs the GitHub App identity (cloning + PR comments) from
+// env, or (nil, nil) when no App credentials are set (fine for public repos).
+func buildGitHubApp(cfg *config.Config) (*ghapp.App, error) {
 	idStr := os.Getenv("SUPRCOW_GITHUB_APP_ID")
 	if idStr == "" {
 		return nil, nil
@@ -202,17 +218,7 @@ func buildCloneAuth(cfg *config.Config) (func(context.Context) (string, error), 
 	if err != nil {
 		return nil, err
 	}
-	app, err := ghapp.NewApp(appID, key)
-	if err != nil {
-		return nil, err
-	}
-	owner, name, err := splitOwnerRepo(cfg.Repo)
-	if err != nil {
-		return nil, err
-	}
-	return func(ctx context.Context) (string, error) {
-		return app.GitAuthHeader(ctx, owner, name)
-	}, nil
+	return ghapp.NewApp(appID, key)
 }
 
 // appPrivateKey reads the GitHub App private key from a file (preferred) or env.

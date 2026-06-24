@@ -28,6 +28,8 @@ type Options struct {
 	WebhookSecret string
 	// Auth optionally gates preview traffic; nil leaves previews open.
 	Auth *auth.GitHub
+	// Comment, if set, posts/updates a comment on a PR (nil disables commenting).
+	Comment func(ctx context.Context, pr int, body string) error
 }
 
 // Server routes webhooks and preview traffic.
@@ -38,6 +40,7 @@ type Server struct {
 	baseDomain    string
 	webhookSecret []byte
 	auth          *auth.GitHub
+	comment       func(ctx context.Context, pr int, body string) error
 }
 
 // New builds a Server, compiling the host matcher from the config.
@@ -53,7 +56,40 @@ func New(o Options) (*Server, error) {
 		baseDomain:    o.BaseDomain,
 		webhookSecret: []byte(o.WebhookSecret),
 		auth:          o.Auth,
+		comment:       o.Comment,
 	}, nil
+}
+
+// previewURL is the primary preview URL for a PR (the first exposed service).
+func (s *Server) previewURL(pr int) string {
+	if len(s.cfg.Expose) == 0 {
+		return ""
+	}
+	host, err := s.cfg.RenderContext(pr, "", "", s.baseDomain).Host(s.cfg.Expose[0].Service)
+	if err != nil {
+		return ""
+	}
+	return "https://" + host + "/"
+}
+
+// maybeComment posts/updates suprcow's PR comment for lifecycle events.
+func (s *Server) maybeComment(ctx context.Context, pr int, action string) {
+	if s.comment == nil {
+		return
+	}
+	var body string
+	switch action {
+	case "opened", "reopened":
+		body = "🐮 **Preview:** " + s.previewURL(pr) +
+			"\n\nSpins up on first visit and idles back down when unused."
+	case "closed", "merged":
+		body = "🐮 Preview torn down (PR closed)."
+	default:
+		return
+	}
+	if err := s.comment(ctx, pr, body); err != nil {
+		log.Printf("pr comment pr=%d action=%s: %v", pr, action, err)
+	}
 }
 
 // Handler returns the daemon's HTTP handler. The webhook and OAuth endpoints

@@ -131,6 +131,7 @@ Open a PR, visit its URL, watch it boot.
 | `rebuild_on` | changed paths that force a rebuild instead of a hot reload (defaults to common lockfiles/Dockerfiles/the compose file) |
 | `on_update` | commands run in a service after a push (e.g. `{ service: api, run: "npm run migrate" }`) |
 | `reload_trigger` | HTTP endpoints suprcow GETs after a hot-reload to nudge a request-driven reloader (e.g. Phoenix `code_reloader`); `{ service, port, path }`. Needed when a backend only recompiles on request but is reached only over WebSocket |
+| `comment_on_pr` | post/update a comment with the preview URL on the PR (default **true**; needs Pull requests: Write) |
 | `idle_timeout` | inactivity before a stack is stopped (volumes kept) |
 | `max_running` | hard cap on running stacks; LRU-evict beyond it |
 | `auth` | access gate (**on by default**): `disabled`, `provider`, `repo`, `allow` (`collaborators`/`org-members`), `org`, `cookie_domain` |
@@ -201,7 +202,9 @@ GitHub App** — for an org-owned repo create it under the org at
 - **Callback URL:** `https://suprcow.preview.example.com/_suprcow/auth/callback`
 - **Webhook → Active**; **URL:** `https://suprcow.preview.example.com/_suprcow/hooks/github`;
   **Secret:** `openssl rand -hex 32` (save it — that's `SUPRCOW_WEBHOOK_SECRET`)
-- **Repository permissions:** Contents: Read-only · Metadata: Read-only · Pull requests: Read-only
+- **Repository permissions:** Contents: Read-only · Metadata: Read-only · Pull requests: **Read & write**
+  (write is only needed to post the preview-URL comment; if you set
+  `comment_on_pr: false`, Pull requests: Read-only is enough)
 - **Subscribe to events:** Pull request
 - **Where can this be installed:** Only on this account
 
@@ -266,8 +269,8 @@ place; rebuild only on dependency/compose changes) with post-update hooks, LRU
 eviction, idle reaping, teardown, GitHub App auth (repo-access gate, on by
 default) with installation-token cloning of private repos, preview-compose
 sanitization (rejects host-escape config — privileged, host bind-mounts, etc. —
-since the daemon holds the Docker socket), webhooks, waiting page, Bolt-backed
-state. On the roadmap: GitLab/Gitea support, build/dep cache
+since the daemon holds the Docker socket), a preview-URL PR comment, webhooks,
+waiting page, Bolt-backed state. On the roadmap: GitLab/Gitea support, build/dep cache
 warming, a status dashboard, and a pluggable non-compose backend.
 
 ## License

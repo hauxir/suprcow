@@ -61,6 +61,16 @@ type Config struct {
 	// nudge a dev server that only recompiles on request (e.g. Phoenix's
 	// code_reloader). Without it, a WebSocket-only backend never sees the change.
 	ReloadTrigger []ReloadHTTP `yaml:"reload_trigger"`
+	// CommentOnPR controls posting/updating a preview-URL comment on the PR.
+	// Enabled by default; needs the GitHub App's Pull requests: Write permission.
+	// nil = enabled.
+	CommentOnPR *bool `yaml:"comment_on_pr"`
+}
+
+// CommentEnabled reports whether suprcow should comment the preview URL on PRs
+// (default true).
+func (c *Config) CommentEnabled() bool {
+	return c.CommentOnPR == nil || *c.CommentOnPR
 }
 
 // ReloadHTTP is an endpoint pinged after a hot-reload to fire a request-driven

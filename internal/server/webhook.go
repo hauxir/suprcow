@@ -67,9 +67,11 @@ func (s *Server) handleGitHub(w http.ResponseWriter, r *http.Request) {
 	branch, sha := ev.PullRequest.Head.Ref, ev.PullRequest.Head.SHA
 	pr := ev.Number
 	go func() {
-		if err := s.mgr.Notify(context.Background(), pr, branch, sha, action); err != nil {
+		ctx := context.Background()
+		if err := s.mgr.Notify(ctx, pr, branch, sha, action); err != nil {
 			log.Printf("webhook: notify pr=%d action=%s: %v", pr, action, err)
 		}
+		s.maybeComment(ctx, pr, action)
 	}()
 
 	fmt.Fprintf(w, "ok: pr=%d action=%s\n", pr, action)
