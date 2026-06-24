@@ -1,4 +1,5 @@
-// Command suprcow runs on-demand, copy-on-write per-PR preview environments.
+// Command suprcow runs on-demand, per-PR preview environments
+// (Compose On-demand Workspaces).
 //
 // Usage:
 //

@@ -1,15 +1,15 @@
 # suprcow
 <img width="195" height="150" alt="Image" src="https://github.com/user-attachments/assets/5638e558-b4b2-4a34-82fb-2aaf35255220" />
 
-**super copy-on-write preview environments** — on-demand, per-PR Docker Compose stacks that spin up on first request and idle back to zero.
+**C**ompose · **O**n-demand · **W**orkspaces — a fresh, isolated Docker Compose environment for every PR, spun up on first request and idled back to zero.
 
 Give every pull request its own isolated, fully-running copy of your app at its
 own subdomain. Stacks spin up **lazily on the first request** to their URL and
 idle back to zero when nobody's looking. One small daemon, one Docker host, your
 existing `docker-compose.yml`. No Kubernetes.
 
-> The name: `supr` spotlights **PR**; **COW** = **C**opy-**O**n-**W**rite — the
-> Docker overlay mechanism that makes each PR's clone cheap — with a wink at
+> The name: `supr` reads "super" and spotlights **PR**; **COW** = **C**ompose
+> **O**n-demand **W**orkspaces — a fresh, isolated stack per PR — with a wink at
 > `apt`'s "Super Cow Powers."
 
 ---
@@ -46,8 +46,7 @@ PR lifecycle + bring-your-own-compose."*
                    │ shared docker network (services by stable alias)
      ┌─────────────┼──────────────┐
      │ pr-123: web, api, db        │  each = `docker compose -p <project>-pr-<n>`
-     │ pr-456: web, api, db        │  sharing base image layers (copy-on-write),
-     │                             │  with its own isolated volumes
+     │ pr-456: web, api, db        │  with its own isolated volumes
      └─────────────────────────────┘
 ```
 
