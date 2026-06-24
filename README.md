@@ -189,29 +189,49 @@ webhooks, user login, *and* private-repo cloning (via short-lived installation
 tokens, so no deploy key or PAT).
 
 ### Setup
-1. Create a GitHub App (Settings → Developer settings → GitHub Apps):
-   - Callback URL: `https://suprcow.preview.example.com/_suprcow/auth/callback`
-   - Webhook URL: `https://suprcow.preview.example.com/_suprcow/hooks/github` + a webhook secret
-   - Permissions: **Contents: Read** (clone), **Metadata: Read**, **Pull requests: Read**
-   - Subscribe to **Pull request** events
-   - Generate a **client secret** and a **private key**
-2. **Install** the App on the repo (or org) you want previews for.
-3. Give the daemon its credentials via env:
-   ```
-   SUPRCOW_GITHUB_CLIENT_ID=...                          # user login
-   SUPRCOW_GITHUB_CLIENT_SECRET=...
-   SUPRCOW_GITHUB_APP_ID=...                             # installation tokens → cloning
-   SUPRCOW_GITHUB_APP_PRIVATE_KEY_FILE=/run/secrets/suprcow-app.pem
-   SUPRCOW_WEBHOOK_SECRET=...                            # App webhook secret
-   SUPRCOW_SESSION_KEY=$(openssl rand -hex 32)           # signs session cookies
-   ```
-4. Done — visiting any preview redirects through GitHub login; the session cookie
-   is scoped to the parent domain, so one login covers every PR subdomain (and,
-   in same-origin mode, every API/WS call). Private repos clone with a
-   short-lived installation token.
 
-The OAuth flow runs on a fixed control host (`suprcow.<base-domain>` by default,
-`--auth-host` to override) because GitHub OAuth Apps allow a single callback URL.
+suprcow is **one GitHub App** that does everything — webhooks, user login, and
+private-repo cloning. Create it once, collect six values, install it.
+
+**1. Create the App.** Go to **Settings → Developer settings → GitHub Apps → New
+GitHub App** — for an org-owned repo create it under the org at
+`https://github.com/organizations/<org>/settings/apps/new`. Set:
+
+- **Homepage URL:** `https://suprcow.preview.example.com` (any valid URL)
+- **Callback URL:** `https://suprcow.preview.example.com/_suprcow/auth/callback`
+- **Webhook → Active**; **URL:** `https://suprcow.preview.example.com/_suprcow/hooks/github`;
+  **Secret:** `openssl rand -hex 32` (save it — that's `SUPRCOW_WEBHOOK_SECRET`)
+- **Repository permissions:** Contents: Read-only · Metadata: Read-only · Pull requests: Read-only
+- **Subscribe to events:** Pull request
+- **Where can this be installed:** Only on this account
+
+**2. Collect the six credentials** — where each one lives once the App exists:
+
+| Credential | Where to get it | Env var |
+|---|---|---|
+| App ID | top of the App's settings page | `SUPRCOW_GITHUB_APP_ID` |
+| Client ID | the App's settings page | `SUPRCOW_GITHUB_CLIENT_ID` |
+| Client secret | **Generate a new client secret** (shown once) | `SUPRCOW_GITHUB_CLIENT_SECRET` |
+| Private key | **Private keys → Generate a private key** (downloads a `.pem`) | `SUPRCOW_GITHUB_APP_PRIVATE_KEY[_FILE]` |
+| Webhook secret | the value you set in step 1 | `SUPRCOW_WEBHOOK_SECRET` |
+| Session key | *not from GitHub* — `openssl rand -hex 32` | `SUPRCOW_SESSION_KEY` |
+
+The private key can be a file (`SUPRCOW_GITHUB_APP_PRIVATE_KEY_FILE=/path/key.pem`)
+or inline as raw PEM **or base64** (`SUPRCOW_GITHUB_APP_PRIVATE_KEY`; base64 is
+handy for secret stores / dotenv: `base64 -w0 key.pem`).
+
+**3. Install the App** on the repo (or org) you want previews for — App page →
+**Install App**. This installation is what lets suprcow clone and mint tokens.
+
+**4. Run the daemon** with those env vars set. Visiting any preview now redirects
+through GitHub login; the session cookie is scoped to the parent domain, so one
+login covers every PR subdomain (and, in same-origin mode, every API/WS call).
+Private repos clone with a short-lived installation token — no deploy key or PAT.
+
+The Client ID/secret drive **user login**; the App ID + private key drive
+**cloning** (installation tokens) — you need all of them. The OAuth flow runs on
+a fixed control host (`suprcow.<base-domain>` by default, `--auth-host` to
+override) because a GitHub App has a single callback URL.
 
 ### Authorization rule
 ```yaml
