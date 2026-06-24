@@ -1,0 +1,61 @@
+# Runs Caddy (wildcard TLS) + the suprcow daemon on one host.
+#
+# Prereqs:
+#   docker network create suprcow      # the shared network stacks join
+#   cp .env.example .env && edit it
+#   put your project's preview.yml next to this file (or adjust the mount)
+#
+#   docker compose up -d --build
+
+name: suprcow
+
+services:
+  caddy:
+    build: ./caddy
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - BASE_DOMAIN=${BASE_DOMAIN}
+      - CF_API_TOKEN=${CF_API_TOKEN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks: [suprcow]
+
+  suprcow:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: always
+    command:
+      - serve
+      - --config=/app/preview.yml
+      - --base-domain=${BASE_DOMAIN}
+      - --repo-url=${REPO_URL}
+      - --data-dir=/data
+      - --network=suprcow
+    environment:
+      - SUPRCOW_WEBHOOK_SECRET=${SUPRCOW_WEBHOOK_SECRET}
+      - SUPRCOW_GITHUB_CLIENT_ID=${SUPRCOW_GITHUB_CLIENT_ID}
+      - SUPRCOW_GITHUB_CLIENT_SECRET=${SUPRCOW_GITHUB_CLIENT_SECRET}
+      - SUPRCOW_GITHUB_APP_ID=${SUPRCOW_GITHUB_APP_ID}
+      - SUPRCOW_GITHUB_APP_PRIVATE_KEY_FILE=/run/secrets/suprcow-app.pem
+      - SUPRCOW_SESSION_KEY=${SUPRCOW_SESSION_KEY}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock   # to drive per-PR stacks
+      - ./preview.yml:/app/preview.yml:ro
+      - ./suprcow-app.pem:/run/secrets/suprcow-app.pem:ro   # GitHub App private key
+      - suprcow-data:/data
+    networks: [suprcow]
+
+networks:
+  suprcow:
+    external: true
+
+volumes:
+  caddy-data:
+  caddy-config:
+  suprcow-data:

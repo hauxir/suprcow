@@ -1,0 +1,11 @@
+# A minimal two-service app for suprcow: a Vite dev server (web) + a tiny API.
+# No host ports — suprcow proxies to the containers over the shared network.
+name: sample
+
+services:
+  api:
+    build: ./api
+
+  web:
+    build: ./web
+    depends_on: [api]

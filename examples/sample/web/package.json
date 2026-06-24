@@ -1,0 +1,11 @@
+{
+  "name": "suprcow-sample-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite"
+  },
+  "devDependencies": {
+    "vite": "^6.0.0"
+  }
+}

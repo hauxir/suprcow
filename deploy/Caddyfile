@@ -1,0 +1,16 @@
+# Wildcard TLS for every preview subdomain, plus a control host for webhooks.
+# All traffic is reverse-proxied to the suprcow daemon, which does the
+# host -> PR/service routing and lazy spawning itself.
+#
+# Requires CF_API_TOKEN in the environment (a Cloudflare token with DNS edit
+# rights for the zone). Set BASE_DOMAIN when rendering, e.g. preview.example.com.
+
+# The wildcard covers both preview hosts (pr-123, api-pr-123, …) and the
+# control host used for the GitHub webhook, e.g.:
+#   https://suprcow.{$BASE_DOMAIN}/_suprcow/hooks/github
+*.{$BASE_DOMAIN} {
+	tls {
+		dns cloudflare {env.CF_API_TOKEN}
+	}
+	reverse_proxy suprcow:8080
+}

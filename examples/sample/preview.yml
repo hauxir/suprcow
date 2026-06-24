@@ -1,0 +1,27 @@
+# suprcow config for the sample app. Same-origin: one host per PR. The Vite
+# frontend is the default; /api and /health are folded onto the same host and
+# routed to the api service — so the browser makes same-origin calls and there's
+# no CORS to configure.
+
+repo: github.com/me/suprcow-sample
+compose: docker-compose.yml
+
+expose:
+  - service: web
+    subdomain: "pr-{n}"          # -> pr-123.preview.example.com
+    port: 5173
+    routes:
+      - { path_prefix: "/api/", service: api, port: 3000 }
+      - { path: "/health", service: api, port: 3000 }
+
+health:
+  api: { http: "/health", timeout: 60s }
+  web: { tcp: 5173, timeout: 120s }
+
+idle_timeout: 20m
+max_running: 10
+
+# Public demo, so the access gate is turned off. Remove this block to require
+# GitHub repo access (the secure default).
+auth:
+  disabled: true

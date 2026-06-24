@@ -1,0 +1,18 @@
+# Build output
+/suprcow
+/dist/
+*.exe
+
+# Local state / runtime data
+/data/
+*.db
+*.sqlite
+
+# Local env / secrets
+.preview.env
+*.local.yml
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
