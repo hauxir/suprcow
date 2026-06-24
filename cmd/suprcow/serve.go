@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"flag"
 	"fmt"
 	"log"
@@ -223,8 +224,17 @@ func appPrivateKey() ([]byte, error) {
 		}
 		return b, nil
 	}
-	if pem := os.Getenv("SUPRCOW_GITHUB_APP_PRIVATE_KEY"); pem != "" {
-		return []byte(pem), nil
+	if key := os.Getenv("SUPRCOW_GITHUB_APP_PRIVATE_KEY"); key != "" {
+		// Accept raw PEM, or base64-encoded PEM (single-line, friendly for
+		// secret stores / dotenv that can't hold multi-line values).
+		if strings.Contains(key, "BEGIN") {
+			return []byte(key), nil
+		}
+		decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(key))
+		if err != nil {
+			return nil, fmt.Errorf("SUPRCOW_GITHUB_APP_PRIVATE_KEY is neither PEM nor base64: %w", err)
+		}
+		return decoded, nil
 	}
 	return nil, fmt.Errorf("SUPRCOW_GITHUB_APP_ID is set but no private key (SUPRCOW_GITHUB_APP_PRIVATE_KEY[_FILE])")
 }
