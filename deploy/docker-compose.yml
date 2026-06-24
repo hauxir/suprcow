@@ -26,9 +26,13 @@ services:
     networks: [suprcow]
 
   suprcow:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile
+    # Published by CI (.github/workflows/docker.yml). Pin to a tag/sha in real
+    # use. To build from source instead, comment `image` and uncomment `build`.
+    image: ghcr.io/hauxir/suprcow:latest
+    pull_policy: always
+    # build:
+    #   context: ..
+    #   dockerfile: deploy/Dockerfile
     restart: always
     command:
       - serve
