@@ -205,6 +205,14 @@ GitHub App** — for an org-owned repo create it under the org at
 - **Subscribe to events:** Pull request
 - **Where can this be installed:** Only on this account
 
+> **The URLs don't need to be live yet.** GitHub doesn't check that the callback
+> or webhook URLs are reachable when you create the App — they only need to
+> resolve once the daemon is running (for webhook delivery and login). So create
+> the App and collect its credentials *before* the host and DNS exist; by the
+> time those URLs are hit, your deploy has brought them up. (Any webhooks GitHub
+> tries to send before then just fail and can be redelivered from the App's
+> **Advanced** tab — and previews spawn lazily on first visit regardless.)
+
 **2. Collect the six credentials** — where each one lives once the App exists:
 
 | Credential | Where to get it | Env var |
