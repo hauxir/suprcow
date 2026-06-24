@@ -70,6 +70,9 @@ type Manager struct {
 
 	// ready polls a single service's health gate; injectable for tests.
 	ready func(ctx context.Context, alias string, hc config.HealthCheck) error
+	// reload fires a request-driven recompile (e.g. Phoenix code_reloader) after
+	// a hot-reload; injectable for tests.
+	reload func(ctx context.Context, url string) error
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
@@ -99,6 +102,7 @@ func New(o Options) *Manager {
 		locks:         map[string]*sync.Mutex{},
 	}
 	m.ready = m.defaultReady
+	m.reload = defaultReload
 	return m
 }
 
@@ -208,6 +212,9 @@ func (m *Manager) autoPull(ctx context.Context, e *env.Environment, oldSHA strin
 	if err := m.writeInjectFiles(rc, wt); err != nil {
 		return err
 	}
+	// Nudge request-driven dev servers (e.g. Phoenix code_reloader) to recompile
+	// the updated source — without this a WebSocket-only backend never reloads.
+	m.triggerReloads(ctx, e.PR)
 	if err := m.runUpdateHooks(ctx, e); err != nil {
 		return err
 	}

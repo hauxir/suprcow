@@ -236,6 +236,47 @@ func TestAutoPullRebuildOnDeps(t *testing.T) {
 	}
 }
 
+func TestReloadTriggerOnHotReload(t *testing.T) {
+	now := time.Now()
+	cfg, err := config.Parse([]byte(`
+repo: github.com/me/app
+expose:
+  - { service: web, subdomain: "pr-{n}", port: 80 }
+reload_trigger:
+  - { service: api, port: 4000, path: "/" }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	be := newFakeBackend()
+	repo := &fakeRepo{dir: t.TempDir()}
+	m := New(Options{
+		Project: "kosmi", Config: cfg, BaseDomain: "preview.example.com",
+		DataDir: t.TempDir(), Store: store.NewMemory(), Repo: repo, Backend: be,
+		Now: func() time.Time { return now },
+	})
+	var pinged []string
+	m.reload = func(_ context.Context, url string) error { pinged = append(pinged, url); return nil }
+	ctx := context.Background()
+
+	_ = m.Notify(ctx, 7, "b", "old", "opened")
+	if _, err := m.EnsureUp(ctx, 7); err != nil {
+		t.Fatal(err)
+	}
+	if len(pinged) != 0 {
+		t.Fatalf("no reload ping expected on initial spawn, got %v", pinged)
+	}
+
+	repo.changed = []string{"lib/poker.ex"} // code-only → hot reload
+	if err := m.Notify(ctx, 7, "b", "new", "synchronize"); err != nil {
+		t.Fatal(err)
+	}
+	want := "http://kosmi-pr-7-api:4000/"
+	if len(pinged) != 1 || pinged[0] != want {
+		t.Fatalf("reload ping = %v, want [%s]", pinged, want)
+	}
+}
+
 func TestOnUpdateHooks(t *testing.T) {
 	now := time.Now()
 	cfg, err := config.Parse([]byte(`

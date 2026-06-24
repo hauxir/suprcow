@@ -3,6 +3,7 @@ package manager
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"strconv"
@@ -10,6 +11,35 @@ import (
 
 	"github.com/hauxir/suprcow/internal/config"
 )
+
+// reloadClient pings reload endpoints. The dev server recompiles synchronously
+// before responding, so the timeout must allow for a full recompile.
+var reloadClient = &http.Client{Timeout: 120 * time.Second}
+
+// defaultReload GETs url to trigger a request-driven recompile. Any HTTP
+// response means the reloader ran; the status code is irrelevant.
+func defaultReload(ctx context.Context, url string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := reloadClient.Do(req)
+	if err != nil {
+		return err
+	}
+	return resp.Body.Close()
+}
+
+// triggerReloads pings each configured reload endpoint so a request-driven dev
+// server recompiles the just-updated source. Best effort: failures are logged.
+func (m *Manager) triggerReloads(ctx context.Context, pr int) {
+	for _, t := range m.cfg.ReloadTrigger {
+		url := fmt.Sprintf("http://%s:%d%s", serviceAlias(m.project, pr, t.Service), t.Port, t.Path)
+		if err := m.reload(ctx, url); err != nil {
+			log.Printf("reload trigger pr=%d service=%s: %v", pr, t.Service, err)
+		}
+	}
+}
 
 // defaultHealthTimeout bounds readiness waiting when a health check omits one.
 const defaultHealthTimeout = 120 * time.Second

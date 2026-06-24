@@ -57,6 +57,18 @@ type Config struct {
 	// OnUpdate runs commands inside service containers after a push updates a
 	// running env (e.g. database migrations).
 	OnUpdate []UpdateHook `yaml:"on_update"`
+	// ReloadTrigger lists HTTP endpoints suprcow GETs after a hot-reload push, to
+	// nudge a dev server that only recompiles on request (e.g. Phoenix's
+	// code_reloader). Without it, a WebSocket-only backend never sees the change.
+	ReloadTrigger []ReloadHTTP `yaml:"reload_trigger"`
+}
+
+// ReloadHTTP is an endpoint pinged after a hot-reload to fire a request-driven
+// recompile (Phoenix code_reloader and the like).
+type ReloadHTTP struct {
+	Service string `yaml:"service"`
+	Port    int    `yaml:"port"`
+	Path    string `yaml:"path"`
 }
 
 // UpdateHook is a command run in a service container after an auto-pull.
@@ -242,6 +254,11 @@ func (c *Config) applyDefaults() {
 	if len(c.RebuildOn) == 0 {
 		c.RebuildOn = DefaultRebuildOn
 	}
+	for i := range c.ReloadTrigger {
+		if c.ReloadTrigger[i].Path == "" {
+			c.ReloadTrigger[i].Path = "/"
+		}
+	}
 	// Auth is on by default: an absent block means "enabled with defaults".
 	if c.Auth == nil {
 		c.Auth = &Auth{}
@@ -337,6 +354,15 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	for i, r := range c.ReloadTrigger {
+		if r.Service == "" {
+			return fmt.Errorf("reload_trigger[%d]: service is required", i)
+		}
+		if r.Port < 1 || r.Port > 65535 {
+			return fmt.Errorf("reload_trigger[%d] (%s): port must be 1-65535, got %d", i, r.Service, r.Port)
+		}
+	}
+
 	if c.Auth != nil {
 		switch c.Auth.Provider {
 		case "", "github":
@@ -379,6 +405,10 @@ func (c *Config) AliasServices() []string {
 		for _, r := range e.Routes {
 			add(r.Service)
 		}
+	}
+	// Reload-trigger targets must be reachable by the daemon too.
+	for _, t := range c.ReloadTrigger {
+		add(t.Service)
 	}
 	return out
 }

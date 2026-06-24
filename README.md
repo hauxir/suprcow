@@ -130,6 +130,7 @@ Open a PR, visit its URL, watch it boot.
 | `health{}` | readiness gate per service: `http` path or `tcp` port, plus `timeout` |
 | `rebuild_on` | changed paths that force a rebuild instead of a hot reload (defaults to common lockfiles/Dockerfiles/the compose file) |
 | `on_update` | commands run in a service after a push (e.g. `{ service: api, run: "npm run migrate" }`) |
+| `reload_trigger` | HTTP endpoints suprcow GETs after a hot-reload to nudge a request-driven reloader (e.g. Phoenix `code_reloader`); `{ service, port, path }`. Needed when a backend only recompiles on request but is reached only over WebSocket |
 | `idle_timeout` | inactivity before a stack is stopped (volumes kept) |
 | `max_running` | hard cap on running stacks; LRU-evict beyond it |
 | `auth` | access gate (**on by default**): `disabled`, `provider`, `repo`, `allow` (`collaborators`/`org-members`), `org`, `cookie_domain` |
