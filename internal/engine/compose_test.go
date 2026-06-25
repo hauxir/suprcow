@@ -66,6 +66,42 @@ func TestDownArgs(t *testing.T) {
 	}
 }
 
+func TestRemoveVolumesArgs(t *testing.T) {
+	f := &fakeRunner{}
+	c := NewCompose(f)
+	if err := c.RemoveVolumes(context.Background(), "demo-pr-1", []string{"web-node-modules", "cache"}); err != nil {
+		t.Fatal(err)
+	}
+	// First a down WITHOUT -v (keeps other volumes), then a targeted rm per name.
+	want := []string{
+		"compose -p demo-pr-1 down --remove-orphans",
+		"volume rm -f demo-pr-1_web-node-modules",
+		"volume rm -f demo-pr-1_cache",
+	}
+	if len(f.calls) != len(want) {
+		t.Fatalf("got %d calls, want %d: %v", len(f.calls), len(want), f.calls)
+	}
+	for i, w := range want {
+		if got := strings.Join(f.calls[i].args, " "); got != w {
+			t.Errorf("call %d = %q, want %q", i, got, w)
+		}
+	}
+	if strings.Contains(strings.Join(f.calls[0].args, " "), "-v") {
+		t.Error("down must not pass -v (other volumes must be preserved)")
+	}
+}
+
+func TestRemoveVolumesEmptyNoop(t *testing.T) {
+	f := &fakeRunner{}
+	c := NewCompose(f)
+	if err := c.RemoveVolumes(context.Background(), "demo-pr-1", nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.calls) != 0 {
+		t.Errorf("no names → no docker calls, got %v", f.calls)
+	}
+}
+
 func TestState(t *testing.T) {
 	tests := []struct {
 		name    string

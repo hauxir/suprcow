@@ -54,6 +54,14 @@ type Config struct {
 	// compose file). Matched by basename, exact path, or directory prefix.
 	// Defaults to common lockfiles/manifests when empty.
 	RebuildOn []string `yaml:"rebuild_on"`
+	// ResetVolumesOnRebuild lists named volumes (by their key in the compose
+	// file) to delete and re-seed from the image whenever a rebuild_on change
+	// triggers an image rebuild. Use it for volumes that carry content baked
+	// into the image (e.g. a prebuilt node_modules): Docker only seeds an EMPTY
+	// named volume, so without this a rebuilt image's content never reaches an
+	// existing PR's already-populated volume. All other volumes (databases,
+	// build caches) are left untouched, so persistent state survives a rebuild.
+	ResetVolumesOnRebuild []string `yaml:"reset_volumes_on_rebuild"`
 	// OnUpdate runs commands inside service containers after a push updates a
 	// running env (e.g. database migrations).
 	OnUpdate []UpdateHook `yaml:"on_update"`

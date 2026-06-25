@@ -46,6 +46,7 @@ func (f *fakeRepo) Remove(_ context.Context, pr int) error {
 type fakeBackend struct {
 	up, stop, down []string
 	exec           []string
+	rmVolumes      []string
 	state          map[string]engine.RunState
 }
 
@@ -69,6 +70,12 @@ func (b *fakeBackend) Stop(_ context.Context, project string) error {
 func (b *fakeBackend) Down(_ context.Context, project string) error {
 	b.down = append(b.down, project)
 	delete(b.state, project)
+	return nil
+}
+func (b *fakeBackend) RemoveVolumes(_ context.Context, project string, names []string) error {
+	for _, n := range names {
+		b.rmVolumes = append(b.rmVolumes, project+"_"+n)
+	}
 	return nil
 }
 func (b *fakeBackend) State(_ context.Context, project string) (engine.RunState, error) {
@@ -233,6 +240,37 @@ func TestAutoPullRebuildOnDeps(t *testing.T) {
 	}
 	if len(be.up) != 2 {
 		t.Fatalf("dep change must rebuild; ups = %v", be.up)
+	}
+}
+
+func TestAutoPullResetVolumesOnRebuild(t *testing.T) {
+	now := time.Now()
+	m, be, repo := newTestManager(t, 100, &now)
+	m.cfg.ResetVolumesOnRebuild = []string{"web-node-modules"}
+	ctx := context.Background()
+
+	_ = m.Notify(ctx, 5, "b", "old", "opened")
+	if _, err := m.EnsureUp(ctx, 5); err != nil {
+		t.Fatal(err)
+	}
+
+	// Code-only change → hot reload, volumes must NOT be reset.
+	repo.changed = []string{"src/app.tsx"}
+	if err := m.Notify(ctx, 5, "b", "mid", "synchronize"); err != nil {
+		t.Fatal(err)
+	}
+	if len(be.rmVolumes) != 0 {
+		t.Fatalf("hot reload must not reset volumes; got %v", be.rmVolumes)
+	}
+
+	// Dependency change → rebuild, the configured volume is dropped so the new
+	// image re-seeds it.
+	repo.changed = []string{"package.json"}
+	if err := m.Notify(ctx, 5, "b", "new", "synchronize"); err != nil {
+		t.Fatal(err)
+	}
+	if len(be.rmVolumes) != 1 || be.rmVolumes[0] != "demo-pr-5_web-node-modules" {
+		t.Fatalf("rebuild must reset the configured volume; got %v", be.rmVolumes)
 	}
 }
 

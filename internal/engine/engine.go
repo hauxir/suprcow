@@ -40,6 +40,11 @@ type Backend interface {
 	Stop(ctx context.Context, project string) error
 	// Down removes containers AND volumes (teardown on PR close).
 	Down(ctx context.Context, project string) error
+	// RemoveVolumes deletes the given named volumes (scoped <project>_<name>)
+	// after detaching the stack's containers, leaving every other volume intact.
+	// Used on rebuild so a subsequent Up re-seeds them from the freshly built
+	// image (Docker only seeds an EMPTY named volume).
+	RemoveVolumes(ctx context.Context, project string, names []string) error
 	// State reports the coarse running state of the project's containers.
 	State(ctx context.Context, project string) (RunState, error)
 	// Exec runs a command in a running service container (e.g. a migration

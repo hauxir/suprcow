@@ -48,6 +48,28 @@ func (c *Compose) Down(ctx context.Context, project string) error {
 	return err
 }
 
+// RemoveVolumes deletes the named volumes so the next Up re-seeds them from the
+// image. It first brings the stack down WITHOUT -v (removing containers but
+// keeping every named volume), which releases the volumes so they can be
+// deleted, then removes only the requested ones. Other volumes — databases,
+// build caches — are preserved across the rebuild. The caller Ups afterwards.
+func (c *Compose) RemoveVolumes(ctx context.Context, project string, names []string) error {
+	if len(names) == 0 {
+		return nil
+	}
+	if _, err := c.run.Run(ctx, "", nil, "docker", "compose", "-p", project, "down", "--remove-orphans"); err != nil {
+		return err
+	}
+	for _, n := range names {
+		// Compose scopes a named volume as "<project>_<name>". `-f` makes the
+		// removal a no-op (rather than an error) when the volume doesn't exist.
+		if _, err := c.run.Run(ctx, "", nil, "docker", "volume", "rm", "-f", project+"_"+n); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (c *Compose) Exec(ctx context.Context, project, service string, command []string) error {
 	args := append([]string{"compose", "-p", project, "exec", "-T", service}, command...)
 	_, err := c.run.Run(ctx, "", nil, "docker", args...)
