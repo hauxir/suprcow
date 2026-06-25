@@ -200,6 +200,14 @@ func (m *Manager) autoPull(ctx context.Context, e *env.Environment, oldSHA strin
 	changed, err := m.repo.ChangedFiles(ctx, e.PR, oldSHA, e.SHA)
 	if err != nil || m.needsRebuild(changed) {
 		// Rebuild path: recreate the stack (re-renders config, compose up --build).
+		// First drop any configured seed-from-image volumes so the freshly built
+		// image re-seeds them (Docker only seeds an EMPTY named volume). Best
+		// effort: on failure the rebuild still proceeds, just without re-seeding
+		// (i.e. the pre-feature behaviour), so a transient docker error never
+		// blocks a deploy.
+		if len(m.cfg.ResetVolumesOnRebuild) > 0 {
+			_ = m.backend.RemoveVolumes(ctx, e.ComposeProject(), m.cfg.ResetVolumesOnRebuild)
+		}
 		if err := m.spawn(ctx, e); err != nil {
 			return err
 		}

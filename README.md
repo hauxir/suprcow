@@ -129,6 +129,7 @@ Open a PR, visit its URL, watch it boot.
 | `inject{}` | per-service `env` and rendered `files` for cross-service wiring |
 | `health{}` | readiness gate per service: `http` path or `tcp` port, plus `timeout` |
 | `rebuild_on` | changed paths that force a rebuild instead of a hot reload (defaults to common lockfiles/Dockerfiles/the compose file) |
+| `reset_volumes_on_rebuild` | named volumes (by compose key) to delete and re-seed from the image on a rebuild, e.g. `[web-node-modules]`. For volumes that bake image content (Docker only seeds an *empty* named volume, so a rebuilt image otherwise never reaches an existing PR's volume). Other volumes — DBs, caches — are preserved |
 | `on_update` | commands run in a service after a push (e.g. `{ service: api, run: "npm run migrate" }`) |
 | `reload_trigger` | HTTP endpoints suprcow GETs after a hot-reload to nudge a request-driven reloader (e.g. Phoenix `code_reloader`); `{ service, port, path }`. Needed when a backend only recompiles on request but is reached only over WebSocket |
 | `comment_on_pr` | post/update a comment with the preview URL on the PR (default **true**; needs Pull requests: Write) |
