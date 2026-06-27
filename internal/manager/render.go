@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/hauxir/suprcow/internal/config"
+	"github.com/hauxir/suprcow/internal/env"
 	"gopkg.in/yaml.v3"
 )
 
@@ -22,8 +23,10 @@ func serviceAlias(project string, pr int, service string) string {
 	return fmt.Sprintf("%s-pr-%d-%s", project, pr, service)
 }
 
-// buildOverride constructs the compose override document for a PR environment.
-func (m *Manager) buildOverride(rc *config.RenderContext, pr int) (map[string]any, error) {
+// buildOverride constructs the compose override document for a PR environment,
+// injecting the env-var wiring for e's active variant.
+func (m *Manager) buildOverride(rc *config.RenderContext, e *env.Environment) (map[string]any, error) {
+	pr := e.PR
 	services := map[string]any{}
 
 	ensure := func(name string) map[string]any {
@@ -48,7 +51,7 @@ func (m *Manager) buildOverride(rc *config.RenderContext, pr int) (map[string]an
 	}
 
 	// Injected env (with template vars resolved) is added per service.
-	for name, inj := range m.cfg.Inject {
+	for name, inj := range m.effInject(e) {
 		if len(inj.Env) == 0 {
 			continue
 		}
@@ -72,8 +75,8 @@ func (m *Manager) buildOverride(rc *config.RenderContext, pr int) (map[string]an
 }
 
 // writeOverride renders the override file into the worktree and returns its path.
-func (m *Manager) writeOverride(rc *config.RenderContext, pr int, worktree string) (string, error) {
-	doc, err := m.buildOverride(rc, pr)
+func (m *Manager) writeOverride(rc *config.RenderContext, e *env.Environment, worktree string) (string, error) {
+	doc, err := m.buildOverride(rc, e)
 	if err != nil {
 		return "", err
 	}
@@ -88,10 +91,10 @@ func (m *Manager) writeOverride(rc *config.RenderContext, pr int, worktree strin
 	return path, nil
 }
 
-// writeInjectFiles renders configured inject files into the worktree, with
-// template vars resolved. Destinations are constrained to the worktree.
-func (m *Manager) writeInjectFiles(rc *config.RenderContext, worktree string) error {
-	for svc, inj := range m.cfg.Inject {
+// writeInjectFiles renders the given variant's inject files into the worktree,
+// with template vars resolved. Destinations are constrained to the worktree.
+func (m *Manager) writeInjectFiles(rc *config.RenderContext, worktree string, inject map[string]config.Injection) error {
+	for svc, inj := range inject {
 		for _, f := range inj.Files {
 			content, err := rc.Resolve(f.Content)
 			if err != nil {

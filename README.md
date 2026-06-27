@@ -133,6 +133,8 @@ Open a PR, visit its URL, watch it boot.
 | `on_update` | commands run in a service after a push (e.g. `{ service: api, run: "npm run migrate" }`) |
 | `reload_trigger` | HTTP endpoints suprcow GETs after a hot-reload to nudge a request-driven reloader (e.g. Phoenix `code_reloader`); `{ service, port, path }`. Needed when a backend only recompiles on request but is reached only over WebSocket |
 | `comment_on_pr` | post/update a comment with the preview URL on the PR (default **true**; needs Pull requests: Write) |
+| `profiles` | docker compose profiles to activate for every stack (passed as `COMPOSE_PROFILES`). Gate heavy services behind a profile, list it here, and omit it from `lite.profiles` to drop them in the lite variant. Empty = every service starts (default) |
+| `lite` | reduced stack variant for PRs whose diff stays within a subset of the repo (e.g. frontend-only) — see [Lite variant](#lite-variant-frontend-only-prs) |
 | `idle_timeout` | inactivity before a stack is stopped (volumes kept) |
 | `max_running` | hard cap on running stacks; LRU-evict beyond it |
 | `auth` | access gate (**on by default**): `disabled`, `provider`, `repo`, `allow` (`collaborators`/`org-members`), `org`, `cookie_domain` |
@@ -176,6 +178,84 @@ session cookie is sent on every request automatically. Point the frontend's API
 config at its own host (`${PREVIEW_HOST(web)}`) and you're done — see
 [`examples/sample`](examples/sample) for a real two-service app wired this way with
 zero changes to the app's code.
+
+### Lite variant (frontend-only PRs)
+
+Most of a preview's cold-start cost is usually the heavy service: building,
+compiling, and migrating a backend per PR. But many PRs touch only the frontend —
+for those the per-PR backend is identical to the base branch, so running one buys
+nothing. `lite` lets such PRs skip it and point at a shared, already-running
+backend instead, so the preview is ready as soon as the frontend is.
+
+suprcow takes the PR's merge-base diff against `lite.base_branch` (default
+`master`). If **every** changed path is under `when_changed_only` and **none** is
+under `unless_changed`, the stack spawns in lite mode; otherwise the full stack
+runs. The decision fails safe: an unreadable diff, or any path outside the set,
+runs everything. A push that flips the verdict triggers a rebuild (the service
+set changes), not a hot reload.
+
+Lite mode (1) activates `lite.profiles` instead of the top-level `profiles`, so
+services gated behind a profile you drop here don't start, and (2) **replaces**
+`inject`, `health`, `on_update`, and `reload_trigger` with their `lite.*`
+counterparts (each lists exactly what the reduced stack needs — e.g. health-gate
+only the frontend, run frontend codegen but not the backend migration).
+
+Gate the backend + db behind a compose profile so lite can drop them:
+
+```yaml
+# docker-compose.yml
+services:
+  web:                       # no profile → always starts
+    build: ./web
+  api:
+    build: ./api
+    profiles: [fullstack]    # only when the "fullstack" profile is active
+  db:
+    image: postgres:18
+    profiles: [fullstack]
+```
+
+```yaml
+# preview.yml
+profiles: [fullstack]        # full stack runs everything
+expose:
+  - service: web
+    subdomain: "pr-{n}"
+    port: 5173
+    routes:
+      - { path: "/gql-ws", service: api, port: 4000 }
+      - { method: POST, path: "/", service: api, port: 4000 }
+inject:
+  web:
+    files:
+      - dest: web/.config.json
+        content: '{ "apiHost": "${PREVIEW_HOST(web)}" }'   # same-origin per-PR api
+health:
+  web: { tcp: 5173, timeout: 600s }
+  api: { tcp: 4000, timeout: 600s }
+on_update:
+  - { service: api, run: "mix ecto.migrate" }
+  - { service: web, run: "npm run codegen" }
+
+lite:
+  when_changed_only: [web/]
+  unless_changed: [web/src/__generated__/]   # generated schema ⇒ backend contract
+  profiles: []                               # drop fullstack → no api, no db
+  inject:
+    web:
+      files:
+        - dest: web/.config.json
+          content: '{ "apiHost": "api.staging.example.com" }'  # shared backend
+  health:
+    web: { tcp: 5173, timeout: 600s }        # don't gate on api (it's not running)
+  on_update:
+    - { service: web, run: "npm run codegen" }   # no backend migration in lite
+```
+
+A frontend-only PR now starts just `web`, gated only on its own port, talking to
+the shared backend — no per-PR backend build, compile, or migration. Point the
+shared backend at a **staging** environment, not production: a preview can mutate
+whatever it talks to.
 
 ## Access control (on by default)
 

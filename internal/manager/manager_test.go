@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,9 +16,10 @@ import (
 )
 
 type fakeRepo struct {
-	dir     string
-	removed []int
-	changed []string // returned by ChangedFiles
+	dir         string
+	removed     []int
+	changed     []string // returned by ChangedFiles
+	baseChanged []string // returned by ChangedAgainst (lite decision)
 }
 
 func (f *fakeRepo) Checkout(_ context.Context, pr int, _ string) (string, error) {
@@ -38,6 +40,10 @@ func (f *fakeRepo) ChangedFiles(_ context.Context, _ int, _, _ string) ([]string
 	return f.changed, nil
 }
 
+func (f *fakeRepo) ChangedAgainst(_ context.Context, _ int, _, _ string) ([]string, error) {
+	return f.baseChanged, nil
+}
+
 func (f *fakeRepo) Remove(_ context.Context, pr int) error {
 	f.removed = append(f.removed, pr)
 	return nil
@@ -45,6 +51,7 @@ func (f *fakeRepo) Remove(_ context.Context, pr int) error {
 
 type fakeBackend struct {
 	up, stop, down []string
+	upSpecs        []engine.Spec // full specs from each Up (to assert env/profiles)
 	exec           []string
 	rmVolumes      []string
 	state          map[string]engine.RunState
@@ -59,6 +66,7 @@ func (b *fakeBackend) Exec(_ context.Context, project, service string, _ []strin
 }
 func (b *fakeBackend) Up(_ context.Context, spec engine.Spec) error {
 	b.up = append(b.up, spec.Project)
+	b.upSpecs = append(b.upSpecs, spec)
 	b.state[spec.Project] = engine.StateRunning
 	return nil
 }
@@ -369,5 +377,140 @@ func TestTeardown(t *testing.T) {
 	}
 	if _, ok := m.Get(4); ok {
 		t.Fatal("env should be deleted")
+	}
+}
+
+// liteTestConfig is a config with a full stack gated behind the "fullstack"
+// profile and a lite variant for frontend-only PRs that points elsewhere.
+const liteTestConfig = `
+repo: github.com/me/app
+expose:
+  - { service: web, subdomain: "pr-{n}", port: 80 }
+profiles: [fullstack]
+health:
+  web: { tcp: 80, timeout: 60s }
+  api: { tcp: 4000, timeout: 60s }
+on_update:
+  - { service: api, run: "migrate" }
+lite:
+  when_changed_only: [apps/frontend/]
+  unless_changed: [apps/frontend/src/__generated__/]
+  profiles: []
+  health:
+    web: { tcp: 80, timeout: 60s }
+  on_update:
+    - { service: web, run: "codegen" }
+  inject:
+    web:
+      files:
+        - { dest: cfg.json, content: '{"host":"shared"}' }
+`
+
+func composeProfiles(spec engine.Spec) string {
+	for _, kv := range spec.Env {
+		if v, ok := strings.CutPrefix(kv, "COMPOSE_PROFILES="); ok {
+			return v
+		}
+	}
+	return "<unset>"
+}
+
+func newLiteManager(t *testing.T, now time.Time) (*Manager, *fakeBackend, *fakeRepo, *[]string) {
+	t.Helper()
+	cfg, err := config.Parse([]byte(liteTestConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	be := newFakeBackend()
+	repo := &fakeRepo{dir: t.TempDir()}
+	m := New(Options{
+		Project: "demo", Config: cfg, BaseDomain: "preview.example.com",
+		DataDir: t.TempDir(), Store: store.NewMemory(), Repo: repo, Backend: be,
+		Now: func() time.Time { return now },
+	})
+	probed := &[]string{}
+	m.ready = func(_ context.Context, alias string, _ config.HealthCheck) error {
+		*probed = append(*probed, alias)
+		return nil
+	}
+	return m, be, repo, probed
+}
+
+func TestLiteVariantSpawn(t *testing.T) {
+	now := time.Now()
+	m, be, repo, probed := newLiteManager(t, now)
+	ctx := context.Background()
+
+	repo.baseChanged = []string{"apps/frontend/src/App.tsx"} // frontend-only → lite
+	_ = m.Notify(ctx, 1, "b", "sha1", "opened")
+	if _, err := m.EnsureUp(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	e, _, _ := m.store.Get("demo", 1)
+	if !e.Lite {
+		t.Fatal("expected lite variant for a frontend-only diff")
+	}
+	if got := composeProfiles(be.upSpecs[len(be.upSpecs)-1]); got != "" {
+		t.Fatalf("lite COMPOSE_PROFILES = %q, want empty (no profiles)", got)
+	}
+	if len(*probed) != 1 || (*probed)[0] != "demo-pr-1-web" {
+		t.Fatalf("lite health probed %v, want only [demo-pr-1-web]", *probed)
+	}
+	if _, err := os.Stat(filepath.Join(repo.dir, "pr-1", "cfg.json")); err != nil {
+		t.Fatalf("expected lite inject file cfg.json: %v", err)
+	}
+}
+
+func TestFullVariantWhenDiffEscapesLite(t *testing.T) {
+	now := time.Now()
+	m, be, repo, probed := newLiteManager(t, now)
+	ctx := context.Background()
+
+	// Touches a backend path too → not lite.
+	repo.baseChanged = []string{"apps/frontend/src/App.tsx", "apps/backend/lib/x.ex"}
+	_ = m.Notify(ctx, 2, "b", "sha1", "opened")
+	if _, err := m.EnsureUp(ctx, 2); err != nil {
+		t.Fatal(err)
+	}
+
+	e, _, _ := m.store.Get("demo", 2)
+	if e.Lite {
+		t.Fatal("expected full variant when the diff touches backend paths")
+	}
+	if got := composeProfiles(be.upSpecs[len(be.upSpecs)-1]); got != "fullstack" {
+		t.Fatalf("full COMPOSE_PROFILES = %q, want fullstack", got)
+	}
+	if len(*probed) != 2 { // both web and api health gates
+		t.Fatalf("full health probed %v, want web+api", *probed)
+	}
+}
+
+func TestPushFlipFullToLiteRebuilds(t *testing.T) {
+	now := time.Now()
+	m, be, repo, _ := newLiteManager(t, now)
+	ctx := context.Background()
+
+	// Start full (backend touched).
+	repo.baseChanged = []string{"apps/backend/lib/x.ex"}
+	_ = m.Notify(ctx, 3, "b", "sha1", "opened")
+	if _, err := m.EnsureUp(ctx, 3); err != nil {
+		t.Fatal(err)
+	}
+	ups := len(be.up)
+
+	// Push now confined to frontend → flips to lite, which must rebuild (not a
+	// hot reload) because the service set changes.
+	repo.changed = []string{"apps/frontend/src/App.tsx"}
+	repo.baseChanged = []string{"apps/frontend/src/App.tsx"}
+	if err := m.Notify(ctx, 3, "b", "sha2", "synchronize"); err != nil {
+		t.Fatal(err)
+	}
+	if len(be.up) != ups+1 {
+		t.Fatalf("expected a rebuild (Up) on lite/full flip, ups went %d -> %d", ups, len(be.up))
+	}
+	e, _, _ := m.store.Get("demo", 3)
+	if !e.Lite {
+		t.Fatal("expected env to be lite after the flip")
 	}
 }
