@@ -125,6 +125,29 @@ func (r *Repo) ChangedFiles(ctx context.Context, pr int, fromSHA, toSHA string) 
 	return files, nil
 }
 
+// ChangedAgainst returns the paths the PR branch changes relative to baseRef,
+// using the merge-base ("three-dot") diff — i.e. baseRef...headSHA, which is
+// what GitHub's "Files changed" shows and ignores commits that landed on baseRef
+// after the branch diverged. Used to decide whether a PR qualifies for the lite
+// variant. baseRef may be a branch name (e.g. "master"); it resolves against the
+// shared mirror refs the worktree links to. Returns nil when baseRef is empty.
+func (r *Repo) ChangedAgainst(ctx context.Context, pr int, baseRef, headSHA string) ([]string, error) {
+	if baseRef == "" {
+		return nil, nil
+	}
+	out, err := r.run.Run(ctx, r.worktreePath(pr), nil, "git", "diff", "--name-only", baseRef+"..."+headSHA)
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, line := range strings.Split(out, "\n") {
+		if s := strings.TrimSpace(line); s != "" {
+			files = append(files, s)
+		}
+	}
+	return files, nil
+}
+
 // Remove deletes a PR's worktree (called on teardown).
 func (r *Repo) Remove(ctx context.Context, pr int) error {
 	wt := r.worktreePath(pr)

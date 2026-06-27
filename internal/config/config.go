@@ -18,6 +18,9 @@ const (
 	DefaultComposeFile = "docker-compose.yml"
 	DefaultMaxRunning  = 10
 	DefaultIdleTimeout = 30 * time.Minute
+	// DefaultLiteBaseBranch is the ref a lite PR diff is taken against when
+	// lite.base_branch is omitted.
+	DefaultLiteBaseBranch = "master"
 )
 
 // Config is a parsed preview.yml. It is intentionally stack-agnostic: it never
@@ -73,6 +76,62 @@ type Config struct {
 	// Enabled by default; needs the GitHub App's Pull requests: Write permission.
 	// nil = enabled.
 	CommentOnPR *bool `yaml:"comment_on_pr"`
+
+	// Profiles lists docker compose profiles to activate for every stack (passed
+	// to compose as COMPOSE_PROFILES). A service with no `profiles:` always
+	// starts; a service behind a profile starts only when that profile is listed
+	// here. Pair it with `lite` to keep heavy services (a backend + its database)
+	// out of the reduced variant: gate them behind a profile, list that profile
+	// here, and omit it from lite.profiles. Empty = no profiles (every service
+	// starts), which is the default and matches pre-feature behaviour.
+	Profiles []string `yaml:"profiles"`
+
+	// Lite optionally defines a reduced stack variant for PRs whose diff is
+	// confined to a subset of the repo (e.g. frontend-only). See Lite.
+	Lite *Lite `yaml:"lite"`
+}
+
+// Lite describes a reduced stack variant used when a PR's diff (computed against
+// Lite.BaseBranch with a merge-base diff) touches ONLY paths under
+// WhenChangedOnly and none under UnlessChanged. The intended use: a frontend-only
+// PR skips building/running the backend + database (gate them behind a compose
+// profile that Lite.Profiles omits) and instead points the frontend at a shared,
+// already-running backend (via Lite.Inject) — so the preview is ready as soon as
+// the frontend is, with no per-PR backend build, compile, or migration.
+//
+// The decision is conservative: if the diff can't be computed, or touches any
+// path outside WhenChangedOnly, the full stack runs. The variant fields below
+// REPLACE (do not merge with) their top-level counterparts when lite is active,
+// so each lists exactly what the reduced stack needs — e.g. a lite OnUpdate that
+// runs frontend codegen but not the backend migration.
+type Lite struct {
+	// BaseBranch is the ref the PR diff is taken against (merge-base diff).
+	// Defaults to "master". Resolved against the shared mirror, so a branch name
+	// is fine.
+	BaseBranch string `yaml:"base_branch"`
+	// WhenChangedOnly is the set of path prefixes a PR must stay within to
+	// qualify for lite. Required and non-empty (otherwise lite would match every
+	// PR). Directory-prefix matched, like rebuild_on.
+	WhenChangedOnly []string `yaml:"when_changed_only"`
+	// UnlessChanged disqualifies a PR from lite if it touches any of these paths,
+	// even when they sit under WhenChangedOnly — an escape hatch for files that
+	// imply a backend contract (e.g. a generated GraphQL schema).
+	UnlessChanged []string `yaml:"unless_changed"`
+	// Profiles are the compose profiles to activate in lite mode (default none,
+	// i.e. only profile-less services start).
+	Profiles []string `yaml:"profiles"`
+	// Inject replaces the top-level Inject in lite mode (e.g. point the frontend
+	// at a shared backend host instead of the per-PR one).
+	Inject map[string]Injection `yaml:"inject"`
+	// Health replaces the top-level Health in lite mode (don't gate on services
+	// the lite variant doesn't start).
+	Health map[string]HealthCheck `yaml:"health"`
+	// OnUpdate replaces the top-level OnUpdate in lite mode (e.g. run frontend
+	// codegen but not the backend migration).
+	OnUpdate []UpdateHook `yaml:"on_update"`
+	// ReloadTrigger replaces the top-level ReloadTrigger in lite mode (usually
+	// empty: there's no per-PR backend to nudge).
+	ReloadTrigger []ReloadHTTP `yaml:"reload_trigger"`
 }
 
 // CommentEnabled reports whether suprcow should comment the preview URL on PRs
@@ -287,6 +346,16 @@ func (c *Config) applyDefaults() {
 	if c.Auth.Allow == "" {
 		c.Auth.Allow = "collaborators"
 	}
+	if c.Lite != nil {
+		if c.Lite.BaseBranch == "" {
+			c.Lite.BaseBranch = DefaultLiteBaseBranch
+		}
+		for i := range c.Lite.ReloadTrigger {
+			if c.Lite.ReloadTrigger[i].Path == "" {
+				c.Lite.ReloadTrigger[i].Path = "/"
+			}
+		}
+	}
 }
 
 // AuthEnabled reports whether the access gate should run (the default).
@@ -393,7 +462,80 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("auth.allow %q is invalid (use \"collaborators\" or \"org-members\")", c.Auth.Allow)
 		}
 	}
+
+	if c.Lite != nil {
+		if len(c.Lite.WhenChangedOnly) == 0 {
+			return fmt.Errorf("lite.when_changed_only is required and must be non-empty (otherwise lite would match every PR)")
+		}
+		for svc, h := range c.Lite.Health {
+			if (h.HTTP == "") == (h.TCP == 0) {
+				return fmt.Errorf("lite.health[%s]: set exactly one of http or tcp", svc)
+			}
+			if h.TCP < 0 || h.TCP > 65535 {
+				return fmt.Errorf("lite.health[%s]: tcp must be 1-65535, got %d", svc, h.TCP)
+			}
+		}
+		for svc, inj := range c.Lite.Inject {
+			for j, f := range inj.Files {
+				if f.Dest == "" {
+					return fmt.Errorf("lite.inject[%s].files[%d]: dest is required", svc, j)
+				}
+			}
+		}
+		for i, h := range c.Lite.OnUpdate {
+			if h.Service == "" || h.Run == "" {
+				return fmt.Errorf("lite.on_update[%d]: service and run are required", i)
+			}
+		}
+		for i, r := range c.Lite.ReloadTrigger {
+			if r.Service == "" {
+				return fmt.Errorf("lite.reload_trigger[%d]: service is required", i)
+			}
+			if r.Port < 1 || r.Port > 65535 {
+				return fmt.Errorf("lite.reload_trigger[%d] (%s): port must be 1-65535, got %d", i, r.Service, r.Port)
+			}
+		}
+	}
 	return nil
+}
+
+// LiteMatches reports whether a PR whose merge-base diff is `changed` (paths
+// relative to the repo root, vs lite.base_branch) qualifies for the lite
+// variant: there is at least one changed path, every changed path is under
+// lite.when_changed_only, and none is under lite.unless_changed. An empty
+// changed set (no diff, or a diff that couldn't be computed) is never lite — the
+// safe default is the full stack.
+func (c *Config) LiteMatches(changed []string) bool {
+	if c.Lite == nil || len(changed) == 0 {
+		return false
+	}
+	for _, f := range changed {
+		if pathUnderAny(f, c.Lite.UnlessChanged) {
+			return false
+		}
+		if !pathUnderAny(f, c.Lite.WhenChangedOnly) {
+			return false
+		}
+	}
+	return true
+}
+
+// pathUnderAny reports whether file f equals, or is nested under, any pattern.
+// A pattern matches as a directory prefix (a trailing "/" is optional) — the
+// same directory-prefix style rebuild_on uses.
+func pathUnderAny(f string, patterns []string) bool {
+	for _, p := range patterns {
+		if p == "" {
+			continue
+		}
+		if f == p {
+			return true
+		}
+		if strings.HasPrefix(f, strings.TrimSuffix(p, "/")+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // ExposeFor returns the expose rule for a service, or false if not exposed.

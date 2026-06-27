@@ -173,3 +173,69 @@ func TestResolveUnknownVarErrors(t *testing.T) {
 		t.Error("expected error for non-exposed service")
 	}
 }
+
+func TestLiteValidationRequiresWhenChangedOnly(t *testing.T) {
+	_, err := Parse([]byte(`
+repo: github.com/me/app
+expose:
+  - { service: web, subdomain: "pr-{n}", port: 80 }
+lite:
+  profiles: []
+`))
+	if err == nil {
+		t.Fatal("expected error when lite.when_changed_only is empty")
+	}
+}
+
+func TestLiteDefaultsBaseBranch(t *testing.T) {
+	c, err := Parse([]byte(`
+repo: github.com/me/app
+expose:
+  - { service: web, subdomain: "pr-{n}", port: 80 }
+lite:
+  when_changed_only: [apps/frontend/]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Lite.BaseBranch != DefaultLiteBaseBranch {
+		t.Fatalf("lite.base_branch = %q, want %q", c.Lite.BaseBranch, DefaultLiteBaseBranch)
+	}
+}
+
+func TestLiteMatches(t *testing.T) {
+	c, err := Parse([]byte(`
+repo: github.com/me/app
+expose:
+  - { service: web, subdomain: "pr-{n}", port: 80 }
+lite:
+  when_changed_only: [apps/frontend/]
+  unless_changed: [apps/frontend/src/__generated__/]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name    string
+		changed []string
+		want    bool
+	}{
+		{"frontend only", []string{"apps/frontend/src/App.tsx", "apps/frontend/x.ts"}, true},
+		{"touches backend", []string{"apps/frontend/x.tsx", "apps/backend/lib/y.ex"}, false},
+		{"touches excluded generated schema", []string{"apps/frontend/src/__generated__/gql.ts"}, false},
+		{"empty diff is never lite", nil, false},
+		{"root file outside prefix", []string{"apps/frontend/x.tsx", "README.md"}, false},
+	}
+	for _, tc := range cases {
+		if got := c.LiteMatches(tc.changed); got != tc.want {
+			t.Errorf("%s: LiteMatches(%v) = %v, want %v", tc.name, tc.changed, got, tc.want)
+		}
+	}
+}
+
+func TestLiteMatchesNilWhenNoLiteBlock(t *testing.T) {
+	c, _ := Parse([]byte(sample))
+	if c.LiteMatches([]string{"apps/frontend/x.tsx"}) {
+		t.Error("LiteMatches must be false when no lite block is configured")
+	}
+}

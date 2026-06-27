@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path"
 	"path/filepath"
@@ -29,6 +30,9 @@ type GitRepo interface {
 	Checkout(ctx context.Context, pr int, sha string) (string, error)
 	// ChangedFiles lists paths that differ between two commits.
 	ChangedFiles(ctx context.Context, pr int, fromSHA, toSHA string) ([]string, error)
+	// ChangedAgainst lists paths the PR changes vs baseRef (merge-base diff),
+	// used to decide the lite variant.
+	ChangedAgainst(ctx context.Context, pr int, baseRef, headSHA string) ([]string, error)
 	// Remove deletes the PR's worktree.
 	Remove(ctx context.Context, pr int) error
 }
@@ -198,8 +202,11 @@ func (m *Manager) autoPull(ctx context.Context, e *env.Environment, oldSHA strin
 	e.Worktree = wt
 
 	changed, err := m.repo.ChangedFiles(ctx, e.PR, oldSHA, e.SHA)
-	if err != nil || m.needsRebuild(changed) {
+	if err != nil || m.needsRebuild(changed) || m.liteWouldChange(ctx, e) {
 		// Rebuild path: recreate the stack (re-renders config, compose up --build).
+		// Also taken when the push flips the lite/full variant — the set of
+		// services changes, so a hot reload in place would leave the wrong stack
+		// running; spawn recomputes the variant from scratch.
 		// First drop any configured seed-from-image volumes so the freshly built
 		// image re-seeds them (Docker only seeds an EMPTY named volume). Best
 		// effort: on failure the rebuild still proceeds, just without re-seeding
@@ -215,14 +222,16 @@ func (m *Manager) autoPull(ctx context.Context, e *env.Environment, oldSHA strin
 	}
 
 	// Hot-reload path: files are already updated in the worktree; the running
-	// dev server picks them up with no container restart (no waiting page).
+	// dev server picks them up with no container restart (no waiting page). The
+	// variant is unchanged here (a flip took the rebuild path above), so reuse
+	// e.Lite for inject + reload targets.
 	rc := m.cfg.RenderContext(e.PR, e.Branch, e.SHA, m.baseDomain)
-	if err := m.writeInjectFiles(rc, wt); err != nil {
+	if err := m.writeInjectFiles(rc, wt, m.effInject(e)); err != nil {
 		return err
 	}
 	// Nudge request-driven dev servers (e.g. Phoenix code_reloader) to recompile
 	// the updated source — without this a WebSocket-only backend never reloads.
-	m.triggerReloads(ctx, e.PR)
+	m.triggerReloads(ctx, e)
 	if err := m.runUpdateHooks(ctx, e); err != nil {
 		return err
 	}
@@ -259,14 +268,91 @@ func (m *Manager) isRebuildPath(f string) bool {
 }
 
 // runUpdateHooks runs configured post-update commands inside service containers
-// (e.g. migrations) after a push.
+// (e.g. migrations) after a push, using the env's active variant.
 func (m *Manager) runUpdateHooks(ctx context.Context, e *env.Environment) error {
-	for _, h := range m.cfg.OnUpdate {
+	for _, h := range m.effOnUpdate(e) {
 		if err := m.backend.Exec(ctx, e.ComposeProject(), h.Service, []string{"sh", "-c", h.Run}); err != nil {
 			return fmt.Errorf("on_update %s: %w", h.Service, err)
 		}
 	}
 	return nil
+}
+
+// decideLite reports whether e should spawn as the lite variant, from its
+// worktree's merge-base diff vs lite.base_branch. Any diff error falls back to
+// the full stack (logged) — the variant must fail safe toward MORE services, so
+// a transient git error never silently drops the backend from a preview.
+func (m *Manager) decideLite(ctx context.Context, e *env.Environment) bool {
+	if m.cfg.Lite == nil {
+		return false
+	}
+	changed, err := m.repo.ChangedAgainst(ctx, e.PR, m.cfg.Lite.BaseBranch, e.SHA)
+	if err != nil {
+		log.Printf("lite: diff pr=%d vs %s: %v (running full stack)", e.PR, m.cfg.Lite.BaseBranch, err)
+		return false
+	}
+	return m.cfg.LiteMatches(changed)
+}
+
+// liteWouldChange reports whether a push flips e between the full and lite
+// variants (so the stack's service set changes and the push needs a rebuild, not
+// a hot reload). A diff error returns true so the rebuild path recomputes the
+// variant safely in spawn rather than hot-reloading on a stale service set.
+func (m *Manager) liteWouldChange(ctx context.Context, e *env.Environment) bool {
+	if m.cfg.Lite == nil {
+		return false
+	}
+	changed, err := m.repo.ChangedAgainst(ctx, e.PR, m.cfg.Lite.BaseBranch, e.SHA)
+	if err != nil {
+		return true
+	}
+	return m.cfg.LiteMatches(changed) != e.Lite
+}
+
+// The eff* helpers return the config slice/map for e's active variant: the lite
+// counterpart when e spawned lite (and a lite block is configured), else the
+// top-level value. The lite fields REPLACE rather than merge with the top-level
+// ones, so each lite list states exactly what the reduced stack runs.
+func (m *Manager) effInject(e *env.Environment) map[string]config.Injection {
+	if e.Lite && m.cfg.Lite != nil {
+		return m.cfg.Lite.Inject
+	}
+	return m.cfg.Inject
+}
+
+func (m *Manager) effHealth(e *env.Environment) map[string]config.HealthCheck {
+	if e.Lite && m.cfg.Lite != nil {
+		return m.cfg.Lite.Health
+	}
+	return m.cfg.Health
+}
+
+func (m *Manager) effOnUpdate(e *env.Environment) []config.UpdateHook {
+	if e.Lite && m.cfg.Lite != nil {
+		return m.cfg.Lite.OnUpdate
+	}
+	return m.cfg.OnUpdate
+}
+
+func (m *Manager) effReloadTrigger(e *env.Environment) []config.ReloadHTTP {
+	if e.Lite && m.cfg.Lite != nil {
+		return m.cfg.Lite.ReloadTrigger
+	}
+	return m.cfg.ReloadTrigger
+}
+
+func (m *Manager) effProfiles(e *env.Environment) []string {
+	if e.Lite && m.cfg.Lite != nil {
+		return m.cfg.Lite.Profiles
+	}
+	return m.cfg.Profiles
+}
+
+// composeEnv returns the extra process env for `docker compose up`. It always
+// sets COMPOSE_PROFILES (even to empty) so a stack's active profiles are fully
+// determined by config and never leak in from the daemon's ambient environment.
+func (m *Manager) composeEnv(e *env.Environment) []string {
+	return []string{"COMPOSE_PROFILES=" + strings.Join(m.effProfiles(e), ",")}
 }
 
 // EnsureUp lazily brings a PR's stack up (or warm-restarts it) and returns the
@@ -328,12 +414,19 @@ func (m *Manager) spawn(ctx context.Context, e *env.Environment) error {
 		return fmt.Errorf("preview compose rejected: %w", err)
 	}
 
+	// Decide the variant: a PR whose diff (vs lite.base_branch) stays within
+	// lite.when_changed_only runs the reduced "lite" stack. Recomputed on every
+	// (re)spawn from the freshly checked-out worktree. On any diff error we fall
+	// back to the full stack — the safe default; a missing base ref must never
+	// silently drop services.
+	e.Lite = m.decideLite(ctx, e)
+
 	rc := m.cfg.RenderContext(e.PR, e.Branch, e.SHA, m.baseDomain)
-	overridePath, err := m.writeOverride(rc, e.PR, worktree)
+	overridePath, err := m.writeOverride(rc, e, worktree)
 	if err != nil {
 		return err
 	}
-	if err := m.writeInjectFiles(rc, worktree); err != nil {
+	if err := m.writeInjectFiles(rc, worktree, m.effInject(e)); err != nil {
 		return err
 	}
 
@@ -342,12 +435,13 @@ func (m *Manager) spawn(ctx context.Context, e *env.Environment) error {
 		WorkingDir:   worktree,
 		ComposeFiles: []string{m.cfg.Compose, filepath.Base(overridePath)},
 		EnvFiles:     m.envFiles,
+		Env:          m.composeEnv(e),
 	}
 	if err := m.backend.Up(ctx, spec); err != nil {
 		return fmt.Errorf("compose up: %w", err)
 	}
 
-	if err := m.waitHealthy(ctx, e.PR); err != nil {
+	if err := m.waitHealthy(ctx, e); err != nil {
 		return fmt.Errorf("health: %w", err)
 	}
 

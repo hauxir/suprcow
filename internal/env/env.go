@@ -45,6 +45,12 @@ type Environment struct {
 	// Worktree is the absolute path to this PR's git checkout.
 	Worktree string `json:"worktree,omitempty"`
 
+	// Lite records whether this env last spawned as the reduced "lite" variant
+	// (see config.Lite). Persisted so health gates, inject, update hooks, and the
+	// active compose profiles pick the right variant on warm restarts without
+	// recomputing the diff. Recomputed from scratch on every (re)spawn.
+	Lite bool `json:"lite,omitempty"`
+
 	// LastAccess is when traffic last hit this env (drives idle reaping + LRU).
 	LastAccess time.Time `json:"last_access"`
 	// CreatedAt is when the env was first recorded.

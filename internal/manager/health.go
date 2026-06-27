@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/hauxir/suprcow/internal/config"
+	"github.com/hauxir/suprcow/internal/env"
 )
 
 // reloadClient pings reload endpoints. The dev server recompiles synchronously
@@ -32,11 +33,11 @@ func defaultReload(ctx context.Context, url string) error {
 
 // triggerReloads pings each configured reload endpoint so a request-driven dev
 // server recompiles the just-updated source. Best effort: failures are logged.
-func (m *Manager) triggerReloads(ctx context.Context, pr int) {
-	for _, t := range m.cfg.ReloadTrigger {
-		url := fmt.Sprintf("http://%s:%d%s", serviceAlias(m.project, pr, t.Service), t.Port, t.Path)
+func (m *Manager) triggerReloads(ctx context.Context, e *env.Environment) {
+	for _, t := range m.effReloadTrigger(e) {
+		url := fmt.Sprintf("http://%s:%d%s", serviceAlias(m.project, e.PR, t.Service), t.Port, t.Path)
 		if err := m.reload(ctx, url); err != nil {
-			log.Printf("reload trigger pr=%d service=%s: %v", pr, t.Service, err)
+			log.Printf("reload trigger pr=%d service=%s: %v", e.PR, t.Service, err)
 		}
 	}
 }
@@ -47,9 +48,9 @@ const defaultHealthTimeout = 120 * time.Second
 // waitHealthy blocks until every configured health gate for the PR passes, or
 // returns an error if any gate times out. Services are reached on the shared
 // network by their stable alias.
-func (m *Manager) waitHealthy(ctx context.Context, pr int) error {
-	for svc, hc := range m.cfg.Health {
-		alias := serviceAlias(m.project, pr, svc)
+func (m *Manager) waitHealthy(ctx context.Context, e *env.Environment) error {
+	for svc, hc := range m.effHealth(e) {
+		alias := serviceAlias(m.project, e.PR, svc)
 		if err := m.ready(ctx, alias, hc); err != nil {
 			return fmt.Errorf("service %s: %w", svc, err)
 		}
